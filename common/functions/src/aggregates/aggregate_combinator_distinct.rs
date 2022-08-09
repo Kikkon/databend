@@ -21,8 +21,7 @@ use common_arrow::arrow::bitmap::Bitmap;
 use common_datavalues::prelude::*;
 use common_exception::Result;
 use common_io::prelude::*;
-
-use super::aggregate_distinct_state::AggregateDistinctPrimitiveState;
+use common_datavalues::with_match_primitive_type_error;
 use super::aggregate_distinct_state::AggregateDistinctState;
 use super::aggregate_distinct_state::DataGroupValues;
 use super::aggregate_distinct_state::DistinctStateFunc;
@@ -30,9 +29,10 @@ use super::aggregate_function::AggregateFunction;
 use super::aggregate_function_factory::AggregateFunctionCreator;
 use super::aggregate_function_factory::AggregateFunctionDescription;
 use super::aggregate_function_factory::CombinatorDescription;
+use super::aggregate_distinct_state::AggregateDistinctPrimitiveState;
 use super::StateAddr;
-use crate::aggregates::aggregator_common::assert_variadic_arguments;
-use crate::aggregates::AggregateCountFunction;
+use super::aggregator_common::assert_variadic_arguments;
+use super::AggregateCountFunction;
 
 #[derive(Clone)]
 pub struct AggregateDistinctCombinator<S, State> {
@@ -188,17 +188,24 @@ pub fn try_create(
     };
     let nested = nested_creator(nested_name, params, nested_arguments)?;
     if arguments.len() == 1 {
-        return Ok(Arc::new(AggregateDistinctCombinator::<
-            u64,
-            AggregateDistinctPrimitiveState<u64>,
-        > {
-            nested_name: nested_name.to_owned(),
-            arguments,
-            nested,
-            name,
-            _s: PhantomData,
-            _state: PhantomData,
-        }));
+        let data_type = arguments[0].data_type().clone();
+        let phid = data_type.data_type_id().to_physical_type();
+        let result = with_match_primitive_type_error!(phid, |$T| {
+            Arc::new(AggregateDistinctCombinator::<
+                $T,
+                AggregateDistinctPrimitiveState<$T>,
+            > {
+                nested_name: nested_name.to_owned(),
+                arguments,
+                nested,
+                name,
+                _s: PhantomData,
+                _state: PhantomData,
+            })
+        });
+        if result.is_ok() {
+            result
+        }
     }
     Ok(Arc::new(AggregateDistinctCombinator::<
         DataGroupValues,
@@ -212,3 +219,16 @@ pub fn try_create(
         _state: PhantomData,
     }))
 }
+
+pub type UInt8Column = PrimitiveColumn<u8>;
+pub type UInt16Column = PrimitiveColumn<u16>;
+pub type UInt32Column = PrimitiveColumn<u32>;
+pub type UInt64Column = PrimitiveColumn<u64>;
+
+pub type Int8Column = PrimitiveColumn<i8>;
+pub type Int16Column = PrimitiveColumn<i16>;
+pub type Int32Column = PrimitiveColumn<i32>;
+pub type Int64Column = PrimitiveColumn<i64>;
+
+pub type Float32Column = PrimitiveColumn<f32>;
+pub type Float64Column = PrimitiveColumn<f64>;
