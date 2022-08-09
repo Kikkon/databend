@@ -41,7 +41,7 @@ pub trait DistinctStateFunc<S>: Send + Sync {
         input_rows: usize,
     ) -> Result<()>;
     fn merge(&mut self, rhs: &Self) -> Result<()>;
-    fn build_columns(&self, fields: &Vec<DataField>) -> Result<Vec<common_datavalues::ColumnRef>>;
+    fn build_columns(&self, fields: &[DataField]) -> Result<Vec<ColumnRef>>;
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
@@ -50,7 +50,7 @@ pub struct DataGroupValues(Vec<DataGroupValue>);
 pub struct AggregateDistinctState {
     set: HashSet<DataGroupValues, RandomState>,
 }
-pub struct AggregateDistinctPrimitiveState<T: PrimitiveType + std::hash::Hash + std::cmp::Eq> {
+pub struct AggregateDistinctPrimitiveState<T: PrimitiveType + std::hash::Hash + Eq> {
     set: HashSet<T, RandomState>,
 }
 
@@ -59,6 +59,12 @@ pub struct AggregateDistinctStringState {
 }
 
 impl DistinctStateFunc<DataGroupValues> for AggregateDistinctState {
+    fn new() -> Self {
+        AggregateDistinctState {
+            set: HashSet::new(),
+        }
+    }
+
     fn serialize(&self, writer: &mut BytesMut) -> Result<()> {
         serialize_into_buf(writer, &self.set)
     }
@@ -68,10 +74,12 @@ impl DistinctStateFunc<DataGroupValues> for AggregateDistinctState {
         Ok(())
     }
 
-    fn new() -> Self {
-        AggregateDistinctState {
-            set: HashSet::new(),
-        }
+    fn is_empty(&self) -> bool {
+        self.set.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.set.len()
     }
 
     fn add(&mut self, columns: &[ColumnRef], row: usize) -> Result<()> {
@@ -94,7 +102,6 @@ impl DistinctStateFunc<DataGroupValues> for AggregateDistinctState {
     ) -> Result<()> {
         for row in 0..input_rows {
             let values = columns.iter().map(|s| s.get(row)).collect::<Vec<_>>();
-            // dbg!(&values);
             match validity {
                 Some(v) => {
                     if v.get_bit(row) {
@@ -120,20 +127,12 @@ impl DistinctStateFunc<DataGroupValues> for AggregateDistinctState {
         }
         Ok(())
     }
-
     fn merge(&mut self, rhs: &Self) -> Result<()> {
         self.set.extend(rhs.set.clone());
         Ok(())
     }
 
-    fn is_empty(&self) -> bool {
-        self.set.is_empty()
-    }
-    fn len(&self) -> usize {
-        self.set.len()
-    }
-
-    fn build_columns(&self, fields: &Vec<DataField>) -> Result<Vec<ColumnRef>> {
+    fn build_columns(&self, fields: &[DataField]) -> Result<Vec<ColumnRef>> {
         let mut results = Vec::with_capacity(self.set.len());
         self.set.iter().for_each(|group_values| {
             let mut v = Vec::with_capacity(group_values.0.len());
@@ -143,7 +142,6 @@ impl DistinctStateFunc<DataGroupValues> for AggregateDistinctState {
 
             results.push(v);
         });
-        // dbg!(&results);
         let results = (0..fields.len())
             .map(|i| {
                 results
@@ -152,7 +150,6 @@ impl DistinctStateFunc<DataGroupValues> for AggregateDistinctState {
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
-        // dbg!(&results);
         results
             .iter()
             .enumerate()
@@ -165,11 +162,14 @@ impl DistinctStateFunc<DataGroupValues> for AggregateDistinctState {
 }
 
 impl<T> DistinctStateFunc<T> for AggregateDistinctPrimitiveState<T>
-where T: PrimitiveType
-        + std::hash::Hash
-        + std::cmp::Eq
-        + common_datavalues::DFTryFrom<common_datavalues::DataValue>
+where T: PrimitiveType + std::hash::Hash + Eq + DFTryFrom<DataValue>
 {
+    fn new() -> Self {
+        AggregateDistinctPrimitiveState {
+            set: HashSet::new(),
+        }
+    }
+
     fn serialize(&self, writer: &mut BytesMut) -> Result<()> {
         serialize_into_buf(writer, &self.set)
     }
@@ -179,10 +179,12 @@ where T: PrimitiveType
         Ok(())
     }
 
-    fn new() -> Self {
-        AggregateDistinctPrimitiveState {
-            set: HashSet::new(),
-        }
+    fn is_empty(&self) -> bool {
+        self.set.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.set.len()
     }
 
     fn add(&mut self, columns: &[ColumnRef], row: usize) -> Result<()> {
@@ -199,7 +201,6 @@ where T: PrimitiveType
     ) -> Result<()> {
         for row in 0..input_rows {
             let value = columns.get(0).map(|s| s.get(row)).unwrap();
-            // dbg!(&values);
             match validity {
                 Some(v) => {
                     if v.get_bit(row) {
@@ -213,23 +214,15 @@ where T: PrimitiveType
         }
         Ok(())
     }
-
     fn merge(&mut self, rhs: &Self) -> Result<()> {
         self.set.extend(rhs.set.clone());
         Ok(())
     }
 
-    fn is_empty(&self) -> bool {
-        self.set.is_empty()
-    }
-    fn len(&self) -> usize {
-        self.set.len()
-    }
-
-    fn build_columns(&self, fields: &Vec<DataField>) -> Result<Vec<ColumnRef>> {
+    fn build_columns(&self, fields: &[DataField]) -> Result<Vec<ColumnRef>> {
         let mut results = Vec::with_capacity(self.set.len());
         self.set.iter().for_each(|group_values| {
-            results.push(group_values.clone());
+            results.push(*group_values);
         });
 
         let data_type = fields[0].data_type();
@@ -237,13 +230,19 @@ where T: PrimitiveType
             .iter()
             .map(|v| DataValue::try_from(*v).unwrap())
             .collect::<Vec<DataValue>>();
-        let array = columns.as_slice().try_into().unwrap();
+        let array = columns.as_slice();
         let column = data_type.create_column(array).unwrap();
         Ok((&[column]).to_vec())
     }
 }
 
 impl DistinctStateFunc<Vec<u8>> for AggregateDistinctStringState {
+    fn new() -> Self {
+        AggregateDistinctStringState {
+            set: HashSet::new(),
+        }
+    }
+
     fn serialize(&self, writer: &mut BytesMut) -> Result<()> {
         serialize_into_buf(writer, &self.set)
     }
@@ -253,10 +252,12 @@ impl DistinctStateFunc<Vec<u8>> for AggregateDistinctStringState {
         Ok(())
     }
 
-    fn new() -> Self {
-        AggregateDistinctStringState {
-            set: HashSet::new(),
-        }
+    fn is_empty(&self) -> bool {
+        self.set.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.set.len()
     }
 
     fn add(&mut self, columns: &[ColumnRef], row: usize) -> Result<()> {
@@ -273,7 +274,6 @@ impl DistinctStateFunc<Vec<u8>> for AggregateDistinctStringState {
     ) -> Result<()> {
         for row in 0..input_rows {
             let value = columns.get(0).map(|s| s.get(row)).unwrap();
-            // dbg!(&values);
             match validity {
                 Some(v) => {
                     if v.get_bit(row) {
@@ -287,20 +287,12 @@ impl DistinctStateFunc<Vec<u8>> for AggregateDistinctStringState {
         }
         Ok(())
     }
-
     fn merge(&mut self, rhs: &Self) -> Result<()> {
         self.set.extend(rhs.set.clone());
         Ok(())
     }
 
-    fn is_empty(&self) -> bool {
-        self.set.is_empty()
-    }
-    fn len(&self) -> usize {
-        self.set.len()
-    }
-
-    fn build_columns(&self, fields: &Vec<DataField>) -> Result<Vec<ColumnRef>> {
+    fn build_columns(&self, fields: &[DataField]) -> Result<Vec<ColumnRef>> {
         let mut results = Vec::with_capacity(self.set.len());
         self.set.iter().for_each(|group_values| {
             results.push(group_values.clone());
@@ -311,7 +303,7 @@ impl DistinctStateFunc<Vec<u8>> for AggregateDistinctStringState {
             .iter()
             .map(|v| DataValue::String(v.clone()))
             .collect::<Vec<DataValue>>();
-        let array = columns.as_slice().try_into().unwrap();
+        let array = columns.as_slice();
         let column = data_type.create_column(array).unwrap();
         Ok((&[column]).to_vec())
     }

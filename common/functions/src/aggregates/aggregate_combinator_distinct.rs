@@ -119,9 +119,7 @@ where
             if state.is_empty() {
                 return self.nested.merge_result(netest_place, array);
             }
-            // dbg!(&results);
             let columns = state.build_columns(&self.arguments).unwrap();
-            // dbg!(&columns);
             self.nested
                 .accumulate(netest_place, &columns, None, state.len())?;
             // merge_result
@@ -171,7 +169,6 @@ pub fn try_create_uniq(
     params: Vec<DataValue>,
     arguments: Vec<DataField>,
 ) -> Result<Arc<dyn AggregateFunction>> {
-    dbg!(&nested_name);
     let creator: AggregateFunctionCreator = Box::new(AggregateCountFunction::try_create);
     try_create(nested_name, params, arguments, &creator)
 }
@@ -190,7 +187,7 @@ pub fn try_create(
         _ => arguments.clone(),
     };
     let nested = nested_creator(nested_name, params, nested_arguments)?;
-    if arguments.len() == 0 {
+    if arguments.len() == 1 {
         return Ok(Arc::new(AggregateDistinctCombinator::<
             u64,
             AggregateDistinctPrimitiveState<u64>,
