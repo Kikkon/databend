@@ -27,6 +27,12 @@ use parking_lot::RwLock;
 use crate::optimizer::optimize;
 use crate::optimizer::OptimizerConfig;
 use crate::optimizer::OptimizerContext;
+
+use crate::materialize::material;
+use crate::materialize::get_register_material_view;
+use crate::materialize::MaterialConfig;
+use crate::materialize::MaterialContext;
+
 use crate::plans::Plan;
 use crate::Binder;
 use crate::Metadata;
@@ -84,18 +90,30 @@ impl Planner {
                 let binder = Binder::new(
                     self.ctx.clone(),
                     CatalogManager::instance(),
-                    name_resolution_ctx,
+                    name_resolution_ctx.clone(),
                     metadata.clone(),
                 );
                 let plan = binder.bind(&stmt).await?;
 
+                let binder2 = Binder::new(
+                    self.ctx.clone(),
+                    CatalogManager::instance(),
+                    name_resolution_ctx.clone(),
+                    metadata.clone(),
+                );
                 // Step 4: Optimize the SExpr with optimizers, and generate optimized physical SExpr
                 let opt_ctx = Arc::new(OptimizerContext::new(OptimizerConfig {
                     enable_distributed_optimization: !self.ctx.get_cluster().is_empty(),
                 }));
                 let optimized_plan = optimize(self.ctx.clone(), opt_ctx, plan)?;
 
-                Ok((optimized_plan, metadata.clone(), format))
+                // Step 5: use material view rewrite plan
+                let material_view = get_register_material_view(self.ctx.clone()).await?;
+                let material_ctx = Arc::new(MaterialContext::new(MaterialConfig{
+                   enable_material_cache: true,
+                }, material_view));
+                let material_plan = material(self.ctx.clone(), material_ctx, optimized_plan)?;
+                Ok((material_plan, metadata.clone(), format))
             }
             .await;
 

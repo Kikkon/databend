@@ -22,6 +22,7 @@ mod semantic;
 pub(crate) mod binder;
 pub mod optimizer;
 pub mod plans;
+pub mod materialize;
 
 pub use binder::BindContext;
 pub use binder::Binder;
